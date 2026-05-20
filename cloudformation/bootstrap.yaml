@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Bootstrap stack for Terraform remote state. Creates an S3 bucket (with account ID postfix
+  for global uniqueness) and a DynamoDB table for state locking. Deploy this stack before
+  running terraform init for either terraform-main/ or terraform-students/.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: "Base S3 bucket name for Terraform remote state. The actual bucket name will have -<AccountID> appended automatically."
+    Default: "resilient-web-server-tf-state"
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+    ConstraintDescription: "Bucket name must be 3-63 lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric."
+
+  TableName:
+    Type: String
+    Description: "DynamoDB table name for Terraform state locking."
+    Default: "resilient-web-server-tf-locks"
+    AllowedPattern: "^[a-zA-Z0-9_-]{3,255}$"
+    ConstraintDescription: "Table name must be 3-255 alphanumeric characters, hyphens, or underscores."
+
+Resources:
+  TerraformStateBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${BucketName}-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  TerraformStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TerraformStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyUnencryptedTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt TerraformStateBucket.Arn
+              - !Sub "${TerraformStateBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  TerraformLockTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      TableClass: STANDARD
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      AttributeDefinitions:
+        - AttributeName: LockID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: LockID
+          KeyType: HASH
+
+Outputs:
+  StateBucketName:
+    Description: "S3 bucket name for Terraform remote state (includes account ID postfix)"
+    Value: !Ref TerraformStateBucket
+
+  StateBucketArn:
+    Description: "ARN of the S3 bucket for Terraform remote state"
+    Value: !GetAtt TerraformStateBucket.Arn
+
+  LockTableName:
+    Description: "DynamoDB table name for Terraform state locking"
+    Value: !Ref TerraformLockTable
+
+  LockTableArn:
+    Description: "ARN of the DynamoDB table for Terraform state locking"
+    Value: !GetAtt TerraformLockTable.Arn
